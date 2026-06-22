@@ -1,0 +1,21 @@
+# 模型路径
+model:
+  yolo_table_path: "yolov8s.pt"
+  tsr_model_path: "./models/tableformer_light"
+  ocr_use_gpu: false
+# 置信度阈值（验收指标）
+teds_threshold:
+  high: 0.85
+  mid: 0.6
+# 跨页表格配置
+cross_page:
+  enable: true
+  sim_threshold: 0.7
+# 日志与溯源
+log:
+  save_trace: true
+  log_path: "./logs/trace.log"
+# 输出配置
+output:
+  save_badcase: true
+  badcase_dir: "./eval/badcase"

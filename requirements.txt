@@ -1,0 +1,33 @@
+# 图像处理
+opencv-python>=4.8.0
+pillow>=10.0
+numpy==1.26.4
+
+# 表格检测
+ultralytics==8.0.200
+
+# OCR
+paddleocr>=2.7
+
+# TSR、图推理
+scikit-learn>=1.3
+networkx>=3.1
+
+# 语义匹配（跨页拼接）
+torch>=2.0
+transformers==5.12.1
+huggingface-hub==1.20.1
+
+# API服务
+fastapi>=0.104
+uvicorn>=0.24
+websockets==11.0.3
+
+# 配置、日志、数据处理
+pyyaml
+loguru
+pandas
+matplotlib
+
+# 模型轻量化可选
+onnxruntime
