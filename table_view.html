@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>课题8-表格识别可视化面板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: "Microsoft Yahei", sans-serif;
+        }
+        body {
+            background-color: #f5f7fa;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #222;
+            margin-bottom: 24px;
+            font-size: 24px;
+        }
+        .upload-area {
+            background: #fff;
+            border: 2px dashed #409eff;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: all 0.2s;
+        }
+        .upload-area:hover {
+            background-color: #ecf5ff;
+        }
+        #file-input {
+            display: none;
+        }
+        .btn {
+            background: #409eff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn-copy {
+            background: #67c23a;
+            margin-left: 8px;
+        }
+        .row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .img-box {
+            width: 100%;
+            min-height: 300px;
+            border: 1px solid #e4e7ed;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+        }
+        #origin-img {
+            max-width: 100%;
+        }
+        pre {
+            width: 100%;
+            min-height: 280px;
+            padding: 12px;
+            background: #1e1e1e;
+            color: #dcdcdc;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+            white-space: pre-wrap;
+        }
+        .md-preview {
+            border:1px solid #e4e7ed;
+            padding:12px;
+            margin-top:10px;
+        }
+        .md-preview table {
+            border-collapse: collapse;
+            width:100%;
+        }
+        .md-preview td, .md-preview th {
+            border:1px solid #999;
+            padding:6px 10px;
+        }
+        .loading {
+            color:#409eff;
+            font-size:16px;
+            padding:20px;
+            text-align:center;
+        }
+        .error-text {
+            color:#f56c6c;
+            padding:10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>智能表格识别还原 - 可视化测试面板</h1>
+
+        <!-- 上传区域 -->
+        <div class="upload-area" id="upload-box">
+            <p>点击或拖拽图片到此处上传</p>
+            <input type="file" id="file-input" accept="image/png,image/jpg,image/jpeg">
+            <button class="btn">选择图片文件</button>
+        </div>
+
+        <!-- 左右分栏：原图 + 识别结果 -->
+        <div class="row">
+            <!-- 原始图片 -->
+            <div class="card">
+                <div class="card-title">
+                    <span>原始上传表格图片</span>
+                </div>
+                <div class="img-box">
+                    <img id="origin-img" />
+                </div>
+            </div>
+
+            <!-- 识别输出结果 -->
+            <div class="card">
+                <div class="card-title">
+                    <span>解析结果输出</span>
+                </div>
+
+                <div>
+                    <div style="margin-bottom:10px;">
+                        <span>Markdown表格：</span>
+                        <button class="btn btn-copy" onclick="copyMd()">复制Markdown</button>
+                    </div>
+                    <pre id="md-code"></pre>
+                    <div class="md-preview" id="md-preview"></div>
+                </div>
+
+                <div style="margin-top:20px;">
+                    <div style="margin-bottom:10px;">
+                        <span>结构化JSON数据：</span>
+                        <button class="btn btn-copy" onclick="copyJson()">复制JSON</button>
+                    </div>
+                    <pre id="json-code"></pre>
+                </div>
+            </div>
+        </div>
+        <!-- 新增：步骤可视化区域 -->
+        <div class="card" style="margin-top:20px;">
+            <div class="card-title">
+                <span>处理步骤可视化（点击步骤查看详情）</span>
+            </div>
+            <div id="steps-container" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; overflow-x: auto; padding: 10px; border: 1px solid #e4e7ed; border-radius: 4px;">
+                <!-- 步骤标签会动态生成 -->
+            </div>
+            <div id="step-detail" style="border: 1px solid #e4e7ed; border-radius: 4px; padding: 15px; min-height: 300px;">
+                请选择左侧步骤查看详情
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const uploadBox = document.getElementById('upload-box');
+        const fileInput = document.getElementById('file-input');
+        const originImg = document.getElementById('origin-img');
+        const mdCode = document.getElementById('md-code');
+        const jsonCode = document.getElementById('json-code');
+        const mdPreview = document.getElementById('md-preview');
+        const stepsContainer = document.getElementById('steps-container');
+        const stepDetail = document.getElementById('step-detail');
+
+        // 点击上传框触发文件选择
+        uploadBox.addEventListener('click', () => fileInput.click());
+
+        // 拖拽上传
+        uploadBox.addEventListener('dragover', e => {
+            e.preventDefault();
+            uploadBox.style.background = '#ecf5ff';
+        });
+        uploadBox.addEventListener('dragleave', () => {
+            uploadBox.style.background = '#fff';
+        });
+        uploadBox.addEventListener('drop', e => {
+            e.preventDefault();
+            uploadBox.style.background = '#fff';
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // 文件选择监听
+        fileInput.addEventListener('change', () => {
+            if(fileInput.files.length) handleFile(fileInput.files[0]);
+        });
+
+        // 处理图片上传 + 请求后端接口
+        // 改造handleFile函数，新增步骤可视化渲染逻辑
+        async function handleFile(file) {
+            // 清空旧数据
+            mdCode.innerText = "加载中...";
+            jsonCode.innerText = "";
+            mdPreview.innerHTML = "";
+            stepsContainer.innerHTML = "";  // 清空步骤标签
+            stepDetail.innerHTML = "请选择左侧步骤查看详情"; // 清空步骤详情
+
+            // 展示原图
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = e => {
+                originImg.src = e.target.result;
+            }
+
+            // 构造表单数据
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                // 请求后端表格解析接口
+                const res = await fetch('http://127.0.0.1:8008/api/table/parse?page_num=1', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error_detail || "服务500异常");
+
+                // 取出第一张表格数据
+                const tableJson = data.table_list[0] || {};
+                const tableMd = data.markdown_table_list[0] || "无表格数据";
+
+                // 渲染Markdown源码 + 可视化预览
+                mdCode.innerText = tableMd;
+                mdPreview.innerHTML = markdownToHtml(tableMd);
+
+                // 格式化JSON展示
+                jsonCode.innerText = JSON.stringify(tableJson, null, 2);
+
+                // ========== 新增：渲染步骤可视化 ==========
+                renderStepVisualizations(data.step_visualizations || []);
+
+            } catch (err) {
+                mdCode.innerText = "";
+                jsonCode.innerText = `请求失败：${err.message}\n请确认后端服务已启动（127.0.0.1:8008）`;
+            }
+        }
+
+        // 新增：渲染步骤可视化
+        function renderStepVisualizations(steps) {
+            if (!steps.length) {
+                stepsContainer.innerHTML = "<div class='error-text'>无步骤数据</div>";
+                return;
+            }
+
+            // 生成步骤标签
+            steps.forEach((step, index) => {
+                const stepTag = document.createElement('div');
+                stepTag.className = 'step-tag';
+                stepTag.style = `
+                    padding: 8px 12px; 
+                    background: #e6f7ff; 
+                    border: 1px solid #409eff; 
+                    border-radius: 4px; 
+                    cursor: pointer; 
+                    white-space: nowrap;
+                `;
+                stepTag.innerText = `${index+1}. ${step.step_name}`;
+                stepTag.onclick = () => showStepDetail(step, index);
+                stepsContainer.appendChild(stepTag);
+            });
+
+            // 默认展示第一个步骤
+            showStepDetail(steps[0], 0);
+        }
+
+        // 新增：展示步骤详情
+        function showStepDetail(step, index) {
+            // 清空详情区
+            stepDetail.innerHTML = "";
+
+            // 显示步骤描述
+            const descDiv = document.createElement('div');
+            descDiv.style = "margin-bottom: 10px; color: #666; font-size: 14px;";
+            descDiv.innerText = `描述：${step.desc}`;
+            stepDetail.appendChild(descDiv);
+
+            // 根据类型渲染不同内容
+            switch (step.type) {
+                case 'image':
+                    // 图片类型
+                    const img = document.createElement('img');
+                    img.src = `data:image/jpeg;base64,${step.content}`;
+                    img.style = "max-width: 100%; max-height: 500px; border-radius: 4px;";
+                    stepDetail.appendChild(img);
+                    break;
+                case 'json':
+                    // JSON类型
+                    const jsonPre = document.createElement('pre');
+                    jsonPre.style = "width: 100%; background: #1e1e1e; color: #dcdcdc; padding: 12px; border-radius: 4px;";
+                    jsonPre.innerText = JSON.stringify(step.content, null, 2);
+                    stepDetail.appendChild(jsonPre);
+                    break;
+                case 'text':
+                    // 文本类型
+                    const textDiv = document.createElement('div');
+                    textDiv.style = "padding: 12px; background: #f5f5f5; border-radius: 4px; font-size: 14px;";
+                    textDiv.innerText = step.content;
+                    stepDetail.appendChild(textDiv);
+                    break;
+                default:
+                    stepDetail.innerHTML += "<div class='error-text'>不支持的步骤类型</div>";
+            }
+
+            // 高亮选中的步骤标签
+            const allTags = stepsContainer.querySelectorAll('.step-tag');
+            allTags.forEach(tag => tag.style.background = '#e6f7ff');
+            allTags[index].style.background = '#409eff';
+            allTags[index].style.color = 'white';
+        }
+
+        // 复制Markdown
+        async function copyMd() {
+            await navigator.clipboard.writeText(mdCode.innerText);
+            alert("Markdown已复制到剪贴板");
+        }
+        // 复制JSON
+        async function copyJson() {
+            await navigator.clipboard.writeText(jsonCode.innerText);
+            alert("JSON已复制到剪贴板");
+        }
+
+        // 简易Markdown表格转HTML渲染（用于预览）
+        function markdownToHtml(md) {
+            const lines = md.trim().split("\n");
+            if (lines.length < 2) return "<p>无表格内容</p>";
+            let html = "<table>";
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line || line.startsWith("|---")) continue;
+                const cells = line.split("|").map(item => item.trim()).filter(item => item);
+                const tag = i === 0 ? "th" : "td";
+                html += "<tr>";
+                cells.forEach(cell => {
+                    html += `<${tag}>${cell}</${tag}>`;
+                })
+                html += "</tr>";
+            }
+            html += "</table>";
+            return html;
+        }
+    </script>
+</body>
+</html>

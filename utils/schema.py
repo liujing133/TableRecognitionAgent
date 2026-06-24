@@ -16,3 +16,4 @@ class TableAgentResponse(BaseModel):
     markdown_table_list: List[str]
     warning_list: List[Dict]
     total_cost_ms: float
+    step_visualizations: Optional[List[Dict]] = []  # 新增步骤可视化字段

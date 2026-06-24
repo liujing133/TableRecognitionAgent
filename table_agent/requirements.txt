@@ -1,0 +1,11 @@
+# Member 1 module dependencies
+# Install: pip install -r requirements.txt
+
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+pyyaml>=6.0
+loguru>=0.7.0
+numpy>=1.24.0
+pytest>=7.0.0

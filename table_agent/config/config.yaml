@@ -1,0 +1,40 @@
+# 智能表格识别与还原智能体 - 组员1模块配置
+# 实现类型说明：[规则] = 纯CV规则，[模型] = 深度学习模型
+
+preprocessor:
+  # [规则] 图像预处理参数
+  max_image_size: 4096        # 最大边长限制（像素）
+  deskew_threshold: 0.5       # 倾斜角度检测阈值（度），小于此值不矫正
+  denoise_h: 10               # 亮度去噪强度（luminance）
+  denoise_h_color: 10         # 色彩去噪强度
+  binarize_block_size: 15     # 自适应二值化块大小（奇数）
+  binarize_c: 8               # 自适应二值化常数C
+  sharpen_enabled: true       # 是否开启锐化增强
+  output_dpi: 300             # 输出图像DPI标记
+
+detector:
+  # [模型] YOLOv8表格检测参数
+  model_path: "models/yolov8_table.pt"        # 权重文件路径（组员2的tableformer训练脚本可输出）
+  fallback_model: "yolov8n.pt"                # 无自训练权重时使用通用预训练权重
+  conf_threshold: 0.45        # 检测置信度阈值
+  iou_threshold: 0.45         # NMS IOU阈值
+  imgsz: 1024                 # 推理图像尺寸
+  device: "cpu"               # 推理设备，无GPU时用cpu
+  padding: 8                  # 表格区域裁剪时的边缘padding（像素）
+
+ocr:
+  # [模型] PaddleOCR参数
+  lang: "ch"                  # 识别语言：ch=中英文混合
+  use_gpu: false              # 是否使用GPU
+  use_angle_cls: true         # 是否开启文字方向分类（处理倒置文字）
+  det_db_thresh: 0.3          # 文本检测二值化阈值
+  det_db_box_thresh: 0.5      # 文本框过滤阈值
+  rec_batch_num: 6            # 识别批次大小
+  drop_score: 0.5             # 低置信度文字过滤阈值
+  show_log: false             # 是否显示PaddleOCR日志
+
+confidence:
+  # [规则] 置信度分级阈值
+  high: 0.80                  # 高置信：正常输出
+  medium: 0.60                # 中置信：标记警告
+  low: 0.0                    # 低置信：触发预警
