@@ -143,8 +143,8 @@ class TSRParser:
         return self.bbox_to_xyxy(bbox)
 
 
-    def _boxes_overlap(self, box_a, box_b, iou_thresh=0.1):
-        """检测两个 bbox 是否有重叠（用于替代点检测）"""
+    def _boxes_overlap(self, box_a, box_b):
+        """计算两个 bbox 的 IoU（对称）"""
         xa1, ya1, xa2, ya2 = box_a
         xb1, yb1, xb2, yb2 = box_b
         xi1 = max(xa1, xb1)
@@ -152,15 +152,21 @@ class TSRParser:
         xi2 = min(xa2, xb2)
         yi2 = min(ya2, yb2)
         if xi2 <= xi1 or yi2 <= yi1:
-            return False
+            return 0.0
         inter = (xi2 - xi1) * (yi2 - yi1)
-        area_a = (xa2 - xa1) * (ya2 - ya1)
-        if area_a <= 0:
-            return False
-        return inter / area_a >= iou_thresh
+        area_a = max((xa2 - xa1) * (ya2 - ya1), 1.0)
+        area_b = max((xb2 - xb1) * (yb2 - yb1), 1.0)
+        iou = inter / (area_a + area_b - inter)
+        return iou
 
 
     def apply_structure_predictions(self, grid, predictions):
+        """
+        用 TableFormer 预测结果修正网格：
+        - "table column header" / "table projected row header" → 标记 is_header
+        - "table spanning cell" → 合并单元格
+        - 其他标签 → 按 bbox 重叠找到对应格子
+        """
         if not grid:
             return grid, False
 
@@ -168,73 +174,59 @@ class TSRParser:
             pred["label"] in {"table column header", "table projected row header"}
             for pred in predictions
         )
-        span_labels = {"table spanning cell", "table column header", "table projected row header"}
-        spans = [pred for pred in predictions if pred["label"] in span_labels]
 
+        # ---- 第1步：处理 header 标签 ----
+        header_labels = {"table column header", "table projected row header"}
+        for pred in predictions:
+            if pred["label"] not in header_labels:
+                continue
+            span_box = pred["box"]
+            for r, row in enumerate(grid):
+                for c, cell in enumerate(row):
+                    cell_box = self._compute_cell_union_bbox(cell)
+                    center = self.get_cell_center(cell)
+                    # 用点检测（宽松）或低 IoU 检测
+                    if self.point_in_box(center, span_box) or self._boxes_overlap(cell_box, span_box) >= 0.05:
+                        cell["is_header"] = True
+
+        # ---- 第2步：处理 spanning cell 标签（仅真正跨格的才合并） ----
+        span_labels = {"table spanning cell"}
+        spans = [pred for pred in predictions if pred["label"] in span_labels]
         for span in spans:
-            span_box = span["box"]  # [x1, y1, x2, y2] in image (cropped) coords
+            span_box = span["box"]
             contained = []
             for r, row in enumerate(grid):
                 for c, cell in enumerate(row):
                     cell_box = self._compute_cell_union_bbox(cell)
-                    # 改用 bbox 重叠检测替代单点检测
-                    if self._boxes_overlap(cell_box, span_box):
-                        contained.append({"r": r, "c": c, "cell": cell})
+                    iou = self._boxes_overlap(cell_box, span_box)
+                    if iou >= 0.05:
+                        contained.append({"r": r, "c": c, "cell": cell, "iou": iou})
 
-            if not contained:
-                continue
+            if len(contained) < 2:
+                continue  # 至少覆盖2格才算合并
 
-            rows = sorted({item["r"] for item in contained})
-            cols = sorted({item["c"] for item in contained})
-            top_cell = grid[rows[0]][cols[0]]
+            rows_set = sorted({item["r"] for item in contained})
+            cols_set = sorted({item["c"] for item in contained})
+            top_cell = grid[rows_set[0]][cols_set[0]]
 
-            # 仅当预测为 spanning cell 或覆盖多行多列时才合并
-            is_spanning = span["label"] == "table spanning cell"
-            should_merge = is_spanning or len(rows) > 1 or len(cols) > 1
-            if not should_merge:
-                continue
-
-            top_cell["rowspan"] = len(rows)
-            top_cell["colspan"] = len(cols)
+            top_cell["rowspan"] = len(rows_set)
+            top_cell["colspan"] = len(cols_set)
             merged_texts = []
             merged_bboxes = []
-            for r in rows:
-                for c in cols:
+            for r in rows_set:
+                for c in cols_set:
                     cell = grid[r][c]
                     if cell.get("text"):
                         merged_texts.append(cell["text"])
                     merged_bboxes.append(cell.get("bbox", []))
-                    if r != rows[0] or c != cols[0]:
+                    if r != rows_set[0] or c != cols_set[0]:
                         cell["text"] = ""
                         cell["rowspan"] = 1
                         cell["colspan"] = 1
-
             top_cell["text"] = " ".join([t for t in merged_texts if t]).strip()
             top_cell["bbox"] = self.merge_bboxes(merged_bboxes)
 
-        # 温和的空单元格推断（仅当空格的 bbox 与左邻居水平方向明显重叠时）
-        for r, row in enumerate(grid):
-            for c, cell in enumerate(row):
-                text = cell.get("text", "")
-                if text == "" and c > 0:
-                    left_cell = row[c - 1]
-                    left_text = left_cell.get("text", "")
-                    if left_text == "":
-                        continue
-                    # 检查空格的 bbox 是否与左邻居在同一水平带
-                    empty_box = self._compute_cell_union_bbox(cell)
-                    left_box = self._compute_cell_union_bbox(left_cell)
-                    if empty_box and left_box:
-                        # y 方向重叠比例超过 50% → 很可能属于同一行内的合并
-                        y_overlap = max(0, min(empty_box[3], left_box[3]) - max(empty_box[1], left_box[1]))
-                        y_span = max(empty_box[3] - empty_box[1], left_box[3] - left_box[1], 1)
-                        if y_overlap / y_span > 0.5:
-                            left_cell["colspan"] = max(int(left_cell.get("colspan", 1)), 2)
-                            left_cell["text"] = left_text
-                            cell["text"] = ""  # 标记为已合并
-                            cell["colspan"] = 1
-
-        # 多级表头启发式检测
+        # ---- 第3步：多级表头启发式检测 ----
         try:
             if not has_multi_header and len(grid) >= 2:
 
@@ -260,6 +252,7 @@ class TSRParser:
                 cell.setdefault("text", "")
                 cell.setdefault("rowspan", 1)
                 cell.setdefault("colspan", 1)
+                cell.setdefault("is_header", False)
                 cell.setdefault("bbox", cell.get("bbox", []))
         table_struct.setdefault("has_multi_header", False)
         table_struct.setdefault("has_merge_cell", False)
@@ -291,6 +284,7 @@ class TSRParser:
                     "text": cell.get("text", ""),
                     "rowspan": int(cell.get("rowspan", 1)),
                     "colspan": int(cell.get("colspan", 1)),
+                    "is_header": bool(cell.get("is_header", False)),
                     "bbox": bbox,
                 })
             rows.append({"cells": cells})
@@ -303,7 +297,8 @@ class TSRParser:
         return self.normalize_table_struct(table_struct)
 
     def fallback_parse(self, text_blocks, page_meta=None, trace_id="trace"):
-        grid = spatial_clustering.cluster_rows_cols(text_blocks, cfg)
+        normalized = self.normalize_text_blocks(text_blocks)
+        grid = spatial_clustering.cluster_rows_cols(normalized if normalized else text_blocks, cfg)
         refined = []
         for row in grid:
             new_row = []
@@ -312,6 +307,7 @@ class TSRParser:
                     "text": cell.get("text", "") if isinstance(cell, dict) else "",
                     "rowspan": 1,
                     "colspan": 1,
+                    "is_header": bool(cell.get("is_header", False)) if isinstance(cell, dict) else False,
                     "bbox": self.bbox_to_xyxy(cell.get("bbox", [])) if isinstance(cell, dict) else [0.0, 0.0, 0.0, 0.0],
                 }
                 if c["text"] == "" and i > 0 and row[i - 1].get("text", "") != "":
