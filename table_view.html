@@ -96,6 +96,10 @@
             font-size: 13px;
             white-space: pre-wrap;
         }
+        #json-code {
+            max-height: 500px;
+            overflow-y: auto;
+        }
         .md-preview {
             border:1px solid #e4e7ed;
             padding:12px;
@@ -128,7 +132,7 @@
         <!-- 上传区域 -->
         <div class="upload-area" id="upload-box">
             <p>点击或拖拽图片到此处上传</p>
-            <input type="file" id="file-input" accept="image/png,image/jpg,image/jpeg">
+            <input type="file" id="file-input" accept="image/png,image/jpg,image/jpeg,image/webp,image/bmp,image/tiff">
             <button class="btn">选择图片文件</button>
         </div>
 
@@ -177,13 +181,21 @@
                 </div>
             </div>
         </div>
-        <!-- 新增：步骤可视化区域 -->
+        <!-- 多表格切换和诊断区（放在步骤可视化前面） -->
+        <div class="card" style="margin-top:20px;">
+            <div class="card-title">
+                <span>多表格切换</span>
+            </div>
+            <div id="table-tabs" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;"></div>
+            <div id="table-diagnostics" style="font-size:13px;color:#666;margin-bottom:12px;"></div>
+        </div>
+
+        <!-- 步骤可视化区域 -->
         <div class="card" style="margin-top:20px;">
             <div class="card-title">
                 <span>处理步骤可视化（点击步骤查看详情）</span>
             </div>
             <div id="steps-container" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; overflow-x: auto; padding: 10px; border: 1px solid #e4e7ed; border-radius: 4px;">
-                <!-- 步骤标签会动态生成 -->
             </div>
             <div id="step-detail" style="border: 1px solid #e4e7ed; border-radius: 4px; padding: 15px; min-height: 300px;">
                 请选择左侧步骤查看详情
@@ -200,6 +212,13 @@
         const mdPreview = document.getElementById('md-preview');
         const stepsContainer = document.getElementById('steps-container');
         const stepDetail = document.getElementById('step-detail');
+        const tableTabs = document.getElementById('table-tabs');
+        const tableDiagnostics = document.getElementById('table-diagnostics');
+
+        // 全局存储所有表格数据
+        var allTableData = [];
+        var allMdData = [];
+        var currentTableIdx = 0;
 
         // 点击上传框触发文件选择
         uploadBox.addEventListener('click', () => fileInput.click());
@@ -226,28 +245,25 @@
         });
 
         // 处理图片上传 + 请求后端接口
-        // 改造handleFile函数，新增步骤可视化渲染逻辑
         async function handleFile(file) {
-            // 清空旧数据
             mdCode.innerText = "加载中...";
             jsonCode.innerText = "";
             mdPreview.innerHTML = "";
-            stepsContainer.innerHTML = "";  // 清空步骤标签
-            stepDetail.innerHTML = "请选择左侧步骤查看详情"; // 清空步骤详情
+            stepsContainer.innerHTML = "";
+            stepDetail.innerHTML = "请选择左侧步骤查看详情";
+            tableTabs.innerHTML = "";
+            tableDiagnostics.innerHTML = "";
 
-            // 展示原图
             const reader = new FileReader();
             reader.readAsDataURL(file);
             reader.onload = e => {
                 originImg.src = e.target.result;
             }
 
-            // 构造表单数据
             const formData = new FormData();
             formData.append('file', file);
 
             try {
-                // 请求后端表格解析接口
                 const res = await fetch('http://127.0.0.1:8008/api/table/parse?page_num=1', {
                     method: 'POST',
                     body: formData
@@ -256,63 +272,122 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error_detail || "服务500异常");
 
-                // 取出所有表格数据
-                const tableList = data.table_list || [];
-                const mdList = data.markdown_table_list || [];
+                // 存储全局数据
+                allTableData = data.table_list || [];
+                allMdData = data.markdown_table_list || [];
+                currentTableIndex = 0;
 
-                // 元数据填充
-                document.getElementById('table-count').innerText = tableList.length;
+                // 元数据
+                const totalTables = allTableData.length;
+                document.getElementById('table-count').innerText = totalTables;
                 document.getElementById('cost-ms').innerText = (data.total_cost_ms || 0).toFixed(1) + 'ms';
 
-                // 取第一个表格（多表格时后续可扩展分页/切换）
-                const tableJson = tableList[0] || null;
-                const tableMd = mdList[0] || "";
-
-                // 填充 TEDS / 等级 / 跨页状态
-                if (tableJson) {
-                    var teds = (tableJson.teds_score !== undefined) ? tableJson.teds_score.toFixed(4) : '-';
-                    var warnLv = tableJson.warning_level || '-';
-                    var isCross = tableJson.is_cross_page ? '是' : '否';
-                    document.getElementById('teds-score').innerText = teds;
-                    document.getElementById('warn-level').innerText = warnLv;
-                    document.getElementById('cross-page').innerText = isCross;
-
-                    // 状态徽章
-                    var badge = document.getElementById('status-badge');
-                    var lvColor = '#67c23a';
-                    var lvText = '高置信';
-                    if (warnLv === 'mid_conf_warn') { lvColor = '#e6a23c'; lvText = '中置信⚠'; }
-                    else if (warnLv === 'low_conf_alert') { lvColor = '#f56c6c'; lvText = '低置信🚨'; }
-                    badge.innerHTML = '<span style="background:'+lvColor+';color:#fff;padding:2px 10px;border-radius:10px;">'+lvText+'</span>';
+                // 显示诊断信息
+                var diagHtml = '';
+                if (totalTables === 0) {
+                    diagHtml = '<span style="color:#f56c6c;">⚠ 未检测到任何表格</span>';
+                } else {
+                    diagHtml = '检测到 <b>' + totalTables + '</b> 个表格区域';
+                    // 显示每个表格的检测信息
+                    for (var ti = 0; ti < allTableData.length; ti++) {
+                        var tbl = allTableData[ti];
+                        var bbox = tbl.page_anchor ? (tbl.page_anchor.bbox || []).join(',') : '?';
+                        var conf = tbl.page_anchor ? (tbl.page_anchor.confidence || 0).toFixed(3) : '?';
+                        var rows = (tbl.rows || []).length;
+                        var hasData = rows > 0;
+                        // 从 OCR 诊断信息获取文字块数
+                        var ocrBlocks = tbl._ocr_blocks || 0;
+                        diagHtml += '<br>表格' + (ti+1) + '：检测置信度=' + conf + '，OCR文字块=' + ocrBlocks + '，识别行数=' + rows
+                            + (hasData ? ' ✅' : ' <span style="color:#e6a23c;">⚠ 无数据</span>');
+                    }
                 }
+                tableDiagnostics.innerHTML = diagHtml;
 
-                // 渲染表格内容
-                if (tableMd) {
-                    mdCode.innerText = tableMd;
-                    mdPreview.innerHTML = markdownToHtml(tableMd);
-                } else if (tableJson && tableJson.rows && tableJson.rows.length > 0) {
-                    // Markdown 为空时从 JSON 结构渲染表格
-                    const htmlTable = jsonTableToHtml(tableJson);
-                    mdPreview.innerHTML = htmlTable;
-                    mdCode.innerText = jsonTableToMarkdown(tableJson);
+                if (totalTables > 0) {
+                    // 生成表格切换标签
+                    for (var ti = 0; ti < totalTables; ti++) {
+                        var tab = document.createElement('button');
+                        tab.className = 'btn';
+                        var tbl = allTableData[ti];
+                        var rowCount = (tbl.rows || []).length;
+                        tab.innerText = '表格' + (ti+1) + (rowCount > 0 ? ' ('+rowCount+'行)' : ' (空)');
+                        if (ti === 0) tab.style.background = '#409eff';
+                        else tab.style.background = '#909399';
+                        tab.onclick = (function(idx) { return function() { switchTable(idx); }; })(ti);
+                        tableTabs.appendChild(tab);
+                    }
+                    // 显示第一个表格
+                    showTableData(0);
                 } else {
                     mdCode.innerText = "（无表格数据）";
                     mdPreview.innerHTML = "<p style='color:#999;'>未检测到表格内容</p>";
+                    jsonCode.innerText = JSON.stringify(data, null, 2);
                 }
 
-                // 格式化JSON展示
-                jsonCode.innerText = JSON.stringify(tableJson, null, 2);
-
-                // ========== 渲染步骤可视化 ==========
+                // 渲染步骤可视化
                 renderStepVisualizations(data.step_visualizations || []);
 
             } catch (err) {
                 mdCode.innerText = "";
-                jsonCode.innerText = `请求失败：${err.message}\n请确认后端服务已启动（127.0.0.1:8008）`;
+                jsonCode.innerText = "请求失败：" + err.message + "\n请确认后端服务已启动（127.0.0.1:8008）";
             }
         }
 
-        // 新增：渲染步骤可视化
+        // 切换表格
+        function switchTable(idx) {
+            currentTableIdx = idx;
+            // 高亮当前tab
+            var tabs = tableTabs.querySelectorAll('button');
+            tabs.forEach(function(t, i) {
+                t.style.background = (i === idx) ? '#409eff' : '#909399';
+            });
+            showTableData(idx);
+        }
+
+        // 显示指定索引的表格数据
+        function showTableData(idx) {
+            var tableJson = allTableData[idx] || null;
+            var tableMd = allMdData[idx] || "";
+
+            // 填充 TEDS / 等级 / 跨页状态
+            if (tableJson) {
+                var teds = (tableJson.teds_score !== undefined) ? tableJson.teds_score.toFixed(4) : '-';
+                var warnLv = tableJson.warning_level || '-';
+                var isCross = tableJson.is_cross_page ? '是' : '否';
+                document.getElementById('teds-score').innerText = teds;
+                document.getElementById('warn-level').innerText = warnLv;
+                document.getElementById('cross-page').innerText = isCross;
+
+                var badge = document.getElementById('status-badge');
+                var lvColor = '#67c23a';
+                var lvText = '高置信';
+                if (warnLv === 'mid_conf_warn') { lvColor = '#e6a23c'; lvText = '中置信\u26A0'; }
+                else if (warnLv === 'low_conf_alert') { lvColor = '#f56c6c'; lvText = '低置信\uD83D\uDEA8'; }
+                badge.innerHTML = '<span style="background:'+lvColor+';color:#fff;padding:2px 10px;border-radius:10px;">'+lvText+'</span>';
+            }
+
+            // 渲染表格内容
+            var rows = (tableJson && tableJson.rows) || [];
+            if (tableMd) {
+                mdCode.innerText = tableMd;
+                mdPreview.innerHTML = markdownToHtml(tableMd);
+            } else if (rows.length > 0) {
+                var htmlTable = jsonTableToHtml(tableJson);
+                mdPreview.innerHTML = htmlTable;
+                mdCode.innerText = jsonTableToMarkdown(tableJson);
+            } else if (tableJson) {
+                var confStr = tableJson.page_anchor ? tableJson.page_anchor.confidence.toFixed(3) : '?';
+                mdCode.innerText = "（无表格数据）\n原因：表格结构解析未产生有效行。\n可能原因：\n  1. OCR未识别到文字（空白/模糊区域）\n  2. 表格检测框偏移导致裁剪区域不含表格内容\n  3. 检测置信度过低（" + confStr + "）";
+                mdPreview.innerHTML = "<p style='color:#e6a23c;'>\u26A0 该表格解析结果为空</p>";
+            } else {
+                mdCode.innerText = "（无数据）";
+                mdPreview.innerHTML = "<p style='color:#999;'>无表格数据</p>";
+            }
+
+            jsonCode.innerText = JSON.stringify(tableJson, null, 2);
+        }
+
+        // 渲染步骤可视化
         function renderStepVisualizations(steps) {
             if (!steps.length) {
                 stepsContainer.innerHTML = "<div class='error-text'>无步骤数据</div>";
