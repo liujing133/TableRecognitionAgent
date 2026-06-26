@@ -148,6 +148,15 @@
             <div class="card">
                 <div class="card-title">
                     <span>解析结果输出</span>
+                    <div id="status-badge" style="font-size:12px;"></div>
+                </div>
+
+                <div style="margin-bottom:10px;display:flex;gap:16px;font-size:13px;" id="meta-bar">
+                    <span>表格数：<b id="table-count">-</b></span>
+                    <span>TEDS：<b id="teds-score">-</b></span>
+                    <span>等级：<b id="warn-level">-</b></span>
+                    <span>耗时：<b id="cost-ms">-</b></span>
+                    <span>跨页：<b id="cross-page">-</b></span>
                 </div>
 
                 <div>
@@ -247,18 +256,54 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error_detail || "服务500异常");
 
-                // 取出第一张表格数据
-                const tableJson = data.table_list[0] || {};
-                const tableMd = data.markdown_table_list[0] || "无表格数据";
+                // 取出所有表格数据
+                const tableList = data.table_list || [];
+                const mdList = data.markdown_table_list || [];
 
-                // 渲染Markdown源码 + 可视化预览
-                mdCode.innerText = tableMd;
-                mdPreview.innerHTML = markdownToHtml(tableMd);
+                // 元数据填充
+                document.getElementById('table-count').innerText = tableList.length;
+                document.getElementById('cost-ms').innerText = (data.total_cost_ms || 0).toFixed(1) + 'ms';
+
+                // 取第一个表格（多表格时后续可扩展分页/切换）
+                const tableJson = tableList[0] || null;
+                const tableMd = mdList[0] || "";
+
+                // 填充 TEDS / 等级 / 跨页状态
+                if (tableJson) {
+                    var teds = (tableJson.teds_score !== undefined) ? tableJson.teds_score.toFixed(4) : '-';
+                    var warnLv = tableJson.warning_level || '-';
+                    var isCross = tableJson.is_cross_page ? '是' : '否';
+                    document.getElementById('teds-score').innerText = teds;
+                    document.getElementById('warn-level').innerText = warnLv;
+                    document.getElementById('cross-page').innerText = isCross;
+
+                    // 状态徽章
+                    var badge = document.getElementById('status-badge');
+                    var lvColor = '#67c23a';
+                    var lvText = '高置信';
+                    if (warnLv === 'mid_conf_warn') { lvColor = '#e6a23c'; lvText = '中置信⚠'; }
+                    else if (warnLv === 'low_conf_alert') { lvColor = '#f56c6c'; lvText = '低置信🚨'; }
+                    badge.innerHTML = '<span style="background:'+lvColor+';color:#fff;padding:2px 10px;border-radius:10px;">'+lvText+'</span>';
+                }
+
+                // 渲染表格内容
+                if (tableMd) {
+                    mdCode.innerText = tableMd;
+                    mdPreview.innerHTML = markdownToHtml(tableMd);
+                } else if (tableJson && tableJson.rows && tableJson.rows.length > 0) {
+                    // Markdown 为空时从 JSON 结构渲染表格
+                    const htmlTable = jsonTableToHtml(tableJson);
+                    mdPreview.innerHTML = htmlTable;
+                    mdCode.innerText = jsonTableToMarkdown(tableJson);
+                } else {
+                    mdCode.innerText = "（无表格数据）";
+                    mdPreview.innerHTML = "<p style='color:#999;'>未检测到表格内容</p>";
+                }
 
                 // 格式化JSON展示
                 jsonCode.innerText = JSON.stringify(tableJson, null, 2);
 
-                // ========== 新增：渲染步骤可视化 ==========
+                // ========== 渲染步骤可视化 ==========
                 renderStepVisualizations(data.step_visualizations || []);
 
             } catch (err) {
@@ -349,6 +394,49 @@
         async function copyJson() {
             await navigator.clipboard.writeText(jsonCode.innerText);
             alert("JSON已复制到剪贴板");
+        }
+
+        // 从 JSON 表格结构渲染 HTML 表格（支持 colspan/rowspan）
+        function jsonTableToHtml(tbl) {
+            if (!tbl || !tbl.rows || !tbl.rows.length) return "<p>无表格数据</p>";
+            let html = '<table border="1" style="border-collapse:collapse;width:100%;">';
+            tbl.rows.forEach((row, ri) => {
+                html += "<tr>";
+                const cells = row.cells || [];
+                cells.forEach((cell, ci) => {
+                    const tag = (ri === 0 && !cell.is_header) ? "th" : (cell.is_header ? "th" : "td");
+                    const cs = parseInt(cell.colspan || 1);
+                    const rs = parseInt(cell.rowspan || 1);
+                    const text = (cell.text || "").trim() || "\u00A0";  // &nbsp; 占位
+                    let attrs = "";
+                    if (cs > 1) attrs += ` colspan="${cs}"`;
+                    if (rs > 1) attrs += ` rowspan="${rs}"`;
+                    html += `<${tag}${attrs}>${text}</${tag}>`;
+                });
+                html += "</tr>";
+            });
+            html += "</table>";
+            // 表头标记
+            if (tbl.has_multi_header) html += "<p style='color:#e6a23c;font-size:12px;'>⚠ 多级表头</p>";
+            if (tbl.has_merge_cell) html += "<p style='color:#409eff;font-size:12px;'>ℹ 含合并单元格</p>";
+            return html;
+        }
+
+        // 从 JSON 表格结构转为 Markdown 文本
+        function jsonTableToMarkdown(tbl) {
+            if (!tbl || !tbl.rows || !tbl.rows.length) return "";
+            var lines = [];
+            // 表头行
+            var headerCells = tbl.rows[0].cells || [];
+            var headerTexts = headerCells.map(function(c) { return (c.text || "").trim() || " "; });
+            lines.push("| " + headerTexts.join(" | ") + " |");
+            lines.push("| " + headerTexts.map(function() { return "---"; }).join(" | ") + " |");
+            // 数据行
+            for (var ri = 1; ri < tbl.rows.length; ri++) {
+                var cells = (tbl.rows[ri].cells || []).map(function(c) { return (c.text || "").trim() || " "; });
+                lines.push("| " + cells.join(" | ") + " |");
+            }
+            return lines.join("\n");
         }
 
         // 简易Markdown表格转HTML渲染（用于预览）
