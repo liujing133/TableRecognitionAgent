@@ -5,25 +5,27 @@ preprocessor:
   # [规则] 图像预处理参数
   max_image_size: 4096        # 最大边长限制（像素）
   deskew_threshold: 0.5       # 倾斜角度检测阈值（度），小于此值不矫正
-  denoise_h: 10               # 亮度去噪强度（luminance）
-  denoise_h_color: 10         # 色彩去噪强度
-  binarize_block_size: 15     # 自适应二值化块大小（奇数）
-  binarize_c: 8               # 自适应二值化常数C
+  denoise_h: 5               # 亮度去噪强度（luminance）
+  denoise_h_color: 5         # 色彩去噪强度
+  binarize_block_size: 21     # 自适应二值化块大小（奇数）
+  binarize_c: 6               # 自适应二值化常数C
   sharpen_enabled: true       # 是否开启锐化增强
   output_dpi: 300             # 输出图像DPI标记
-  small_img_threshold: 600    # 小图判定（长边<600像素）
-  clarity_threshold: 30       # 清晰度阈值（拉普拉斯方差，越高越清晰）
+  small_img_threshold: 400    # 小图判定（长边<400像素）
+  clarity_threshold: 20       # 清晰度阈值（拉普拉斯方差，越高越清晰）
   brightness_threshold: 0.3   # 光照均匀性阈值（<0.3判定为光照不均）
 
 detector:
-  # [模型] YOLOv8表格检测参数
-  model_path: "models/yolov8_table.pt"        # 权重文件路径（组员2的tableformer训练脚本可输出）
-  fallback_model: "yolov8n.pt"                # 无自训练权重时使用通用预训练权重
-  conf_threshold: 0.1        # 检测置信度阈值
-  iou_threshold: 0.45         # NMS IOU阈值
-  imgsz: 1024                 # 推理图像尺寸
-  device: "cpu"               # 推理设备，无GPU时用cpu
-  padding: 8                  # 表格区域裁剪时的边缘padding（像素）
+  # [模型] Qwen2.5-VL（Ollama部署）表格检测参数
+  ollama_url: "http://127.0.0.1:11434/api/chat"        # Ollama服务地址
+  ollama_model: "qwen2.5vl:7b-q4_K_M"                  # 使用的模型名称
+  max_img_size: 1024                                   # 图像最大边长（像素）
+  temperature: 0.01                                    # 输出随机性（越低越稳定）
+  timeout: 300                                         # 超时时间（秒）
+  padding: 8                                           # 表格区域裁剪padding（保留原配置）
+  # 置信度分级阈值（保留原配置）
+  conf_threshold: 0.1        
+  iou_threshold: 0.45         
 
 ocr:
   # [模型] PaddleOCR参数
@@ -33,7 +35,7 @@ ocr:
   det_db_thresh: 0.3          # 文本检测二值化阈值
   det_db_box_thresh: 0.5      # 文本框过滤阈值
   rec_batch_num: 6            # 识别批次大小
-  drop_score: 0.5             # 低置信度文字过滤阈值
+  drop_score: 0.01             # 低置信度文字过滤阈值
 
 confidence:
   # [规则] 置信度分级阈值
