@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 from pathlib import Path
 # 解决中文编码
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -102,7 +102,7 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
     det_img = img.copy()
     for i, table in enumerate(result.tables):
         # 从组员1的detection中取检测框坐标
-        box = table.detection["bbox"]  # 假设格式[x1,y1,x2,y2]
+        box = table.detection.bbox   # 假设格式[x1,y1,x2,y2]
         cv2.rectangle(det_img, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 2)
     _, det_img_encoded = cv2.imencode('.jpg', det_img)
     det_img_base64 = base64.b64encode(det_img_encoded).decode('utf-8')
@@ -121,11 +121,13 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
     for idx, table in enumerate(result.tables):
         # ========== 步骤3可视化：文字块提取（从组员1的OCR结果） ==========
         ocr_img = table.crop_bgr.copy()  # 组员1裁剪后的表格BGR图
-        text_blocks = table.ocr_result  # 直接用组员1的OCR结果（无需重新调用OCR）
+        text_blocks = table.ocr_result.blocks  # 直接用组员1的OCR结果（无需重新调用OCR）
         for block in text_blocks:
-            # 适配组员1的OCR格式（假设block含x1,y1,x2,y2,text）
-            cv2.rectangle(ocr_img, (block['x1'], block['y1']), (block['x2'], block['y2']), (0, 255, 0), 1)
-            cv2.putText(ocr_img, block['text'][:10], (block['x1'], block['y1']-5), 
+            # 正确：从文字块对象取bbox属性
+            x1, y1, x2, y2 = block.bbox
+            cv2.rectangle(ocr_img, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            # 正确：访问文字块的text属性
+            cv2.putText(ocr_img, block.text[:10], (x1, y1-5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
         _, ocr_img_encoded = cv2.imencode('.jpg', ocr_img)
         ocr_img_base64 = base64.b64encode(ocr_img_encoded).decode('utf-8')
@@ -176,8 +178,8 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
         # 锚点信息（从组员1的检测结果中提取）
         anchor = {
             "page": page_num,
-            "bbox": table.detection["bbox"],
-            "confidence": table.detection["confidence"]
+            "bbox": table.detection.bbox,  # 正确：属性访问
+            "confidence": table.detection.confidence  # 正确：属性访问
         }
         
         # 双形态导出（保留原有逻辑）
