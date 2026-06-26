@@ -4,13 +4,14 @@ from pathlib import Path
 # 解决中文编码
 os.environ["PYTHONIOENCODING"] = "utf-8"
 sys.path.append(str(Path(__file__).parent.parent))
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
 import numpy as np
 import time
 import yaml
 import base64
+import json
 from io import BytesIO
 
 # ========== 替换核心：导入组员1的Pipeline ==========
@@ -54,15 +55,7 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
     # 新增：校验图片解码是否成功
     if img is None:
         log_trace(trace_id, "ERROR", "图片解码失败：空数据或不支持的格式")
-        return TableAgentResponse(
-            trace_id=trace_id,
-            table_list=[],
-            markdown_table_list=[],
-            warning_list=[],
-            total_cost_ms=round((time.time()-start_time)*1000,2),
-            step_visualizations=[],
-            error_msg="图片解码失败，请检查文件是否为空或格式是否支持（jpg/png）"
-        )
+        raise HTTPException(status_code=400, detail="图片解码失败，请检查文件是否为空或格式是否支持（jpg/png）")
     
     # ========== 步骤1：调用组员1的Pipeline处理整页 ==========
     import tempfile
@@ -102,7 +95,7 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
     det_img = img.copy()
     for i, table in enumerate(result.tables):
         # 从组员1的detection中取检测框坐标
-        box = table.detection["bbox"]  # 假设格式[x1,y1,x2,y2]
+        box = table.detection.bbox  # DetectedTable 对象属性格式[x1,y1,x2,y2]
         cv2.rectangle(det_img, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 2)
     _, det_img_encoded = cv2.imencode('.jpg', det_img)
     det_img_base64 = base64.b64encode(det_img_encoded).decode('utf-8')
@@ -121,11 +114,21 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
     for idx, table in enumerate(result.tables):
         # ========== 步骤3可视化：文字块提取（从组员1的OCR结果） ==========
         ocr_img = table.crop_bgr.copy()  # 组员1裁剪后的表格BGR图
-        text_blocks = table.ocr_result  # 直接用组员1的OCR结果（无需重新调用OCR）
-        for block in text_blocks:
-            # 适配组员1的OCR格式（假设block含x1,y1,x2,y2,text）
-            cv2.rectangle(ocr_img, (block['x1'], block['y1']), (block['x2'], block['y2']), (0, 255, 0), 1)
-            cv2.putText(ocr_img, block['text'][:10], (block['x1'], block['y1']-5), 
+        text_blocks = []
+        for block in table.ocr_result.blocks:
+            bbox = block.bbox
+            x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            text_blocks.append({
+                "text": block.text,
+                "confidence": float(block.confidence),
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "bbox": [x1, y1, x2, y2],
+            })
+            cv2.rectangle(ocr_img, (x1, y1), (x2, y2), (0, 255, 0), 1)
+            cv2.putText(ocr_img, block.text[:10], (x1, y1-5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
         _, ocr_img_encoded = cv2.imencode('.jpg', ocr_img)
         ocr_img_base64 = base64.b64encode(ocr_img_encoded).decode('utf-8')
@@ -138,7 +141,7 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
         log_trace(trace_id, f"STEP_OCR_TABLE{idx+1}", f"提取{len(text_blocks)}个文字块")
 
         # ========== 步骤4：表格结构解析（保留原有TSR逻辑） ==========
-        table_struct = tsr.parse(text_blocks, trace_id)
+        table_struct = tsr.parse(text_blocks, trace_id, table_img=table.crop_bgr)
         table_struct["table_id"] = f"tbl_{trace_id}_{idx}"
         step_visualizations.append({
             "step_name": f"表格结构解析-表格{idx+1}",
@@ -150,9 +153,20 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
 
         # ========== 步骤5：跨页拼接（保留原有逻辑） ==========
         cross_page_info = "未启用跨页拼接"
-        if cfg["cross_page"]["enable"] and last_page_table:
-            table_struct = merge_cross_page(last_page_table, table_struct, trace_id)
-            cross_page_info = "完成跨页表格拼接"
+        if cfg["cross_page"]["enable"] and idx == 0 and last_page_table:
+            if isinstance(last_page_table, str):
+                try:
+                    last_page_table = json.loads(last_page_table)
+                except Exception as e:
+                    log_trace(trace_id, "ERROR", {"last_page_table_parse_error": str(e)})
+                    last_page_table = None
+            if isinstance(last_page_table, dict):
+                table_struct = merge_cross_page(last_page_table, table_struct, trace_id)
+                cross_page_info = "完成跨页表格拼接"
+            else:
+                log_trace(trace_id, "WARN", "last_page_table格式不正确，跳过跨页拼接")
+        elif cfg["cross_page"]["enable"] and idx != 0 and last_page_table:
+            cross_page_info = "仅对当前页第一个表格进行跨页拼接"
         step_visualizations.append({
             "step_name": f"跨页拼接-表格{idx+1}",
             "type": "text",
@@ -176,8 +190,8 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
         # 锚点信息（从组员1的检测结果中提取）
         anchor = {
             "page": page_num,
-            "bbox": table.detection["bbox"],
-            "confidence": table.detection["confidence"]
+            "bbox": list(table.detection.bbox),
+            "confidence": float(table.detection.confidence)
         }
         
         # 双形态导出（保留原有逻辑）
