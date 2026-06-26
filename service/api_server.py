@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 from pathlib import Path
 # 解决中文编码
 os.environ["PYTHONIOENCODING"] = "utf-8"
