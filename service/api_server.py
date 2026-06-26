@@ -118,14 +118,18 @@ async def parse_table(file: UploadFile = File(...), page_num: int = 1, last_page
         for block in table.ocr_result.blocks:
             bbox = block.bbox
             x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+            # 关键：补充 points 四点数组，spatial_clustering 就不会报错
+            four_points = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
             text_blocks.append({
                 "text": block.text,
                 "confidence": float(block.confidence),
+                "score": float(block.confidence),  # 兼容旧代码score字段
                 "x1": x1,
                 "y1": y1,
                 "x2": x2,
                 "y2": y2,
                 "bbox": [x1, y1, x2, y2],
+                "points": four_points  # 新增这一行！！
             })
             cv2.rectangle(ocr_img, (x1, y1), (x2, y2), (0, 255, 0), 1)
             cv2.putText(ocr_img, block.text[:10], (x1, y1-5), 

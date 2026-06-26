@@ -6,7 +6,9 @@ import yaml
 
 def cluster_rows_cols(text_blocks, cfg):
     """
-    输入: OCR识别的文字块列表，每个元素含 {"points": [[x1,y1],...], "text": str, "score": float}
+    输入: OCR识别的文字块列表，兼容两种格式：
+    - 格式1: {"points": [[x1,y1],...], "text": str, "score": float}
+    - 格式2: {"bbox": [x1,y1,x2,y2], "text": str, "confidence": float}
     输出: 初始化的行列网格（带空位填充）
     """
     if not text_blocks:
@@ -15,10 +17,25 @@ def cluster_rows_cols(text_blocks, cfg):
     # 1. 提取所有文字框的中心点坐标 (cx, cy)
     centers = []
     for block in text_blocks:
-        pts = np.array(block["points"])
+        # 兼容 points/bbox 两种格式
+        if "points" in block and block["points"]:
+            pts = np.array(block["points"])
+        elif "bbox" in block and len(block["bbox"]) == 4:
+            # 从bbox转换为四点格式 [x1,y1, x2,y1, x2,y2, x1,y2]
+            x1, y1, x2, y2 = block["bbox"]
+            pts = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
+        else:
+            continue  # 跳过无效块
+        
+        # 兼容 score/confidence 字段
+        score = block.get("score", block.get("confidence", 0.0))
+        
         cx = np.mean(pts[:, 0])
         cy = np.mean(pts[:, 1])
-        centers.append([cx, cy, block["text"], block["score"], pts])
+        centers.append([cx, cy, block["text"], score, pts])
+    
+    if not centers:  # 无有效文字块时直接返回空
+        return []
     
     centers = sorted(centers, key=lambda x: x[1])  # 按垂直方向初步排序
     coords = np.array([[c[0], c[1]] for c in centers])
