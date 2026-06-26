@@ -1,33 +1,14 @@
 """
-PaddleOCR 文字提取模块
-实现类型：[模型] PaddleOCR离线模型
-
-职责：
-  1. 对表格裁剪子图执行OCR，提取每行文字及其坐标
-  2. 存储每个文字块的置信度
-  3. 按行列坐标将文字块归属到单元格区域（供TSR模块使用）
-  4. 后处理：过滤低置信字符、基础格式规整
-
-为什么用PaddleOCR：
-  - 中英文混合识别准确率业界领先
-  - 完全离线，支持私有化部署，数据不出域
-  - 轻量级模型在CPU可运行（单张<500ms）
-  - 相比Tesseract，中文识别准确率显著更高
-
-为什么不用大模型（GPT-4V/Qwen-VL）：
-  - LLM每次调用需要网络请求，违反私有化部署要求
-  - 成本高（约$0.01/张，批量处理不可接受）
-  - PaddleOCR的准确率已满足指标要求（>=95%%字符准确率）
+EasyOCR 文字提取模块，替代PaddleOCR规避Windows底层BUG
 """
-
 import re
+import cv2
 import numpy as np
+import easyocr
 from typing import List, Tuple, Optional
 from dataclasses import dataclass, field
 from table_agent.utils.logger import logger
-
 from table_agent.utils.common import get_cfg, validate_image, timeit
-
 
 @dataclass
 class TextBlock:
@@ -35,7 +16,6 @@ class TextBlock:
     confidence: float
     bbox: Tuple[int, int, int, int]
     raw_polygon: List[List[int]]
-
 
 @dataclass
 class OCRResult:
@@ -45,31 +25,48 @@ class OCRResult:
     has_warning: bool = False
     warning_detail: Optional[str] = None
 
-
 class OCREngine:
     def __init__(self):
         self._cfg = get_cfg("ocr")
-        self._ocr = None
+        self._reader = None
+
+    def _get_reader(self):
+        if self._reader is not None:
+            return self._reader
+        logger.info("加载EasyOCR中英文模型...")
+        # 改成项目根models目录，关闭自动下载
+        model_dir = r"./table_agent/models"
+        self._reader = easyocr.Reader(
+            ['ch_sim', 'en'],
+            model_storage_directory=model_dir,
+            download_enabled=False
+        )
+        logger.info("EasyOCR 加载完成")
+        return self._reader
 
     @timeit
     def extract(self, img: np.ndarray, trace_id: str = "") -> OCRResult:
         tag = f"[trace={trace_id}]" if trace_id else ""
         validate_image(img, "ocr_input")
-        ocr = self._get_ocr()
+        reader = self._get_reader()
         drop_score = self._cfg.get("drop_score", 0.5)
-        raw_results = ocr.ocr(img, cls=True)
 
-        if not raw_results or raw_results[0] is None:
-            logger.info(f"{tag} OCR未识别到文字（可能为空白表格区域）")
+        # 限制大图，降低卡顿与崩溃概率
+        h, w = img.shape[:2]
+        max_side = 1200
+        if max(h, w) > max_side:
+            scale = max_side / max(h, w)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        raw_results = reader.readtext(img)
+        if not raw_results:
+            logger.info(f"{tag} OCR未识别到文字（空白表格区域）")
             return OCRResult()
 
         blocks = []
         confidences = []
-
-        for line in raw_results[0]:
-            if line is None:
-                continue
-            polygon, (text, conf) = line
+        for polygon, text, conf in raw_results:
             if conf < drop_score:
                 continue
             pts = np.array(polygon, dtype=np.int32)
@@ -78,7 +75,12 @@ class OCREngine:
             x2 = int(pts[:, 0].max())
             y2 = int(pts[:, 1].max())
             text = self._postprocess_text(text)
-            blocks.append(TextBlock(text=text, confidence=float(conf), bbox=(x1, y1, x2, y2), raw_polygon=polygon))
+            blocks.append(TextBlock(
+                text=text,
+                confidence=float(conf),
+                bbox=(x1, y1, x2, y2),
+                raw_polygon=polygon
+            ))
             confidences.append(float(conf))
 
         if not blocks:
@@ -114,26 +116,6 @@ class OCREngine:
                 existing = cell_texts[best_idx]
                 cell_texts[best_idx] = existing + "\n" + block.text if existing else block.text
         return cell_texts
-
-    def _get_ocr(self):
-        if self._ocr is not None:
-            return self._ocr
-        try:
-            from paddleocr import PaddleOCR
-        except ImportError:
-            raise RuntimeError("未找到 paddleocr 包，请执行：pip install paddlepaddle paddleocr")
-        logger.info("初始化PaddleOCR（首次加载会自动下载模型，约200MB）...")
-        self._ocr = PaddleOCR(
-            lang=self._cfg.get("lang", "ch"),
-            use_gpu=self._cfg.get("use_gpu", False),
-            use_angle_cls=self._cfg.get("use_angle_cls", True),
-            det_db_thresh=self._cfg.get("det_db_thresh", 0.3),
-            det_db_box_thresh=self._cfg.get("det_db_box_thresh", 0.5),
-            rec_batch_num=self._cfg.get("rec_batch_num", 6),
-            show_log=self._cfg.get("show_log", False),
-        )
-        logger.info("PaddleOCR 初始化完成")
-        return self._ocr
 
     def _postprocess_text(self, text):
         if not text:

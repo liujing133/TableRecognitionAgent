@@ -11,12 +11,15 @@ preprocessor:
   binarize_c: 8               # 自适应二值化常数C
   sharpen_enabled: true       # 是否开启锐化增强
   output_dpi: 300             # 输出图像DPI标记
+  small_img_threshold: 600    # 小图判定（长边<600像素）
+  clarity_threshold: 30       # 清晰度阈值（拉普拉斯方差，越高越清晰）
+  brightness_threshold: 0.3   # 光照均匀性阈值（<0.3判定为光照不均）
 
 detector:
   # [模型] YOLOv8表格检测参数
   model_path: "models/yolov8_table.pt"        # 权重文件路径（组员2的tableformer训练脚本可输出）
   fallback_model: "yolov8n.pt"                # 无自训练权重时使用通用预训练权重
-  conf_threshold: 0.45        # 检测置信度阈值
+  conf_threshold: 0.1        # 检测置信度阈值
   iou_threshold: 0.45         # NMS IOU阈值
   imgsz: 1024                 # 推理图像尺寸
   device: "cpu"               # 推理设备，无GPU时用cpu
@@ -25,13 +28,12 @@ detector:
 ocr:
   # [模型] PaddleOCR参数
   lang: "ch"                  # 识别语言：ch=中英文混合
-  use_gpu: false              # 是否使用GPU
+  use_cuda: false              # 是否使用GPU
   use_angle_cls: true         # 是否开启文字方向分类（处理倒置文字）
   det_db_thresh: 0.3          # 文本检测二值化阈值
   det_db_box_thresh: 0.5      # 文本框过滤阈值
   rec_batch_num: 6            # 识别批次大小
   drop_score: 0.5             # 低置信度文字过滤阈值
-  show_log: false             # 是否显示PaddleOCR日志
 
 confidence:
   # [规则] 置信度分级阈值
