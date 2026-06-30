@@ -117,7 +117,6 @@ def cluster_rows_cols(text_blocks, cfg):
     """
     if not text_blocks:
         return []
-
     # 1. 提取所有文字框信息
     centers = []
     for block in text_blocks:
@@ -143,26 +142,21 @@ def cluster_rows_cols(text_blocks, cfg):
     
     centers = sorted(centers, key=lambda x: x[1])  # 按垂直方向初步排序
     coords = np.array([[c[0], c[1]] for c in centers])
-
     # 2. 行聚类 (DBSCAN，基于垂直坐标 cy)
     eps_row = _estimate_eps(centers)
     row_labels = DBSCAN(eps=eps_row, min_samples=1).fit(coords[:, 1].reshape(-1, 1)).labels_
-
     # 3. 按行标签分组，行内按水平坐标 cx 排序
     rows_dict = defaultdict(list)
     for label, item in zip(row_labels, centers):
         rows_dict[label].append(item)
-
     sorted_rows = []
     for label in sorted(rows_dict.keys()):
         row_items = rows_dict[label]
         row_items.sort(key=lambda x: x[0])
         sorted_rows.append(row_items)
-
     # 4. 跨行列对齐
     aligned_rows = _align_columns_across_rows(sorted_rows)
-
-    # 5. 构建最终网格（已对齐，直接转换）
+    # 5. 构建基础网格
     final_grid = []
     for row_items in aligned_rows:
         cells = []
@@ -193,71 +187,46 @@ def cluster_rows_cols(text_blocks, cfg):
             })
         final_grid.append(cells)
 
-    # 5b. 推断合并单元格：检测 x 范围跨越多列边界的格
-    if final_grid and len(final_grid) > 0:
-        # 用参考行的左/右边界确定每列范围
-        col_x_starts = []
-        col_x_ends = []
-        for cell in final_grid[0]:
+    # ========== 修复后的合并单元格推断逻辑（无未定义变量） ==========
+    if not final_grid:
+        return final_grid
+    # 获取参考列边界（第一行）
+    ref_row = final_grid[0]
+    col_boundaries = []
+    for cell in ref_row:
+        pts = np.array(cell["bbox"], dtype=float)
+        if pts.ndim == 2 and pts.shape[1] == 2:
+            x1 = float(np.min(pts[:, 0]))
+            x2 = float(np.max(pts[:, 0]))
+            col_boundaries.append((x1, x2))
+    max_col_cnt = len(col_boundaries)
+    if max_col_cnt == 0:
+        return final_grid
+
+    # 逐行计算单元格跨列colspan
+    for ri, row in enumerate(final_grid):
+        inferred_cols = 0
+        new_cells = []
+        for cell in row:
             pts = np.array(cell["bbox"], dtype=float)
             if pts.ndim == 2 and pts.shape[1] == 2:
-                col_x_starts.append(float(np.min(pts[:, 0])))
-                col_x_ends.append(float(np.max(pts[:, 0])))
+                cx1 = float(np.min(pts[:, 0]))
+                cx2 = float(np.max(pts[:, 0]))
             else:
-                col_x_starts.append(0.0)
-                col_x_ends.append(0.0)
-        # 用相邻列的边界平滑化
-        for i in range(1, len(col_x_starts)):
-            col_x_starts[i] = max(col_x_starts[i], col_x_ends[i-1])
-        for i in range(len(col_x_starts) - 1):
-            col_x_ends[i] = min(col_x_ends[i], col_x_starts[i+1])
+                cx1, cx2 = 0, 0
+            # 计算当前单元格覆盖多少列
+            span = sum(1 for (bx1, bx2) in col_boundaries if not (cx2 < bx1 or cx1 > bx2))
+            span = max(1, span)
+            cell["colspan"] = span
+            new_cells.append(cell)
+            inferred_cols += span
+        # 替换当前行
+        final_grid[ri] = new_cells
 
-        # 对每行检查是否有跨列
-        for ri, row in enumerate(final_grid):
-            for ci, cell in enumerate(row):
-                pts = np.array(cell["bbox"], dtype=float)
-                if pts.ndim == 2 and pts.shape[1] == 2:
-                    cx1, cx2 = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
-                elif pts.ndim == 1 and pts.size == 4:
-                    cx1, cx2 = float(pts[0]), float(pts[2])
-                else:
-                    cx1, cx2 = 0.0, 0.0
-                cx_mid = (cx1 + cx2) / 2.0
-                # 计算此 Cell 跨越了几列
-                span = 1
-                for bi, (bx1, bx2) in enumerate(col_boundaries):
-                    if bi < inferred_cols:
-                        continue
-                    if cx1 <= bx2 and cx2 >= bx1:
-                        # 此格子的 x 范围与该列相交
-                        if inferred_cols == bi:
-                            span = 1
-                            inferred_cols += 1
-                        else:
-                            # 跳过了一些列 → 需要补 colspan
-                            gap = bi - inferred_cols
-                            if gap > 0:
-                                inferred_cols += gap
-                                span += gap
-                            inferred_cols += 1
-                            span += (bi + 1 - inferred_cols) if bi + 1 > inferred_cols else 0
-                            break
-                # 更精确的跨度计算：以 x 区间覆盖的列数
-                actual_span = max(1, sum(1 for bx1, bx2 in col_boundaries
-                                         if not (cx2 < bx1 or cx1 > bx2)))
-                if actual_span > 1:
-                    cell["colspan"] = actual_span
-                    inferred_cols += actual_span - 1
-                new_cells.append(cell)
-                inferred_cols += 1
-                if inferred_cols >= max_col_cnt:
-                    break
-
-            # 用新推断的单元格替换
-            row.clear()
-            row.extend(new_cells)
-            # 补空到 max_col_cnt
-            # while len(row) < max_col_cnt:
-            #     row.append({"text": "", "score": 0, "bbox": [], "rowspan": 1, "colspan": 1})
-
-    return final_grid
+    # 可选：过滤全空白行，解决导出大量空行空白单元格
+    clean_grid = []
+    for r in final_grid:
+        has_text = any(c["text"].strip() for c in r)
+        if has_text:
+            clean_grid.append(r)
+    return clean_grid
