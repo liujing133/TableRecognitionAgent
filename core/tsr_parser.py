@@ -312,7 +312,7 @@ class TSRParser:
                 }
                 if c["text"] == "" and i > 0 and row[i - 1].get("text", "") != "":
                     c["colspan"] = 2
-                    c["text"] = row[i - 1].get("text", "") + "(续)"
+                    c["text"] = ""
                 new_row.append(c)
             refined.append({"cells": new_row})
         table_struct = {"rows": refined, "has_multi_header": False, "has_merge_cell": False, "fallback_used": True}

@@ -286,7 +286,7 @@ def cluster_rows_cols(text_blocks, cfg):
             row.clear()
             row.extend(new_cells)
             # 补空到 max_col_cnt
-            while len(row) < max_col_cnt:
-                row.append({"text": "", "score": 0, "bbox": [], "rowspan": 1, "colspan": 1})
+            # while len(row) < max_col_cnt:
+            #     row.append({"text": "", "score": 0, "bbox": [], "rowspan": 1, "colspan": 1})
 
     return final_grid

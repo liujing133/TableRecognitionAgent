@@ -241,7 +241,7 @@ class TableDetector:
 
     def _parse_vlm_result(
         self,
-        box_list: List[List[int]],
+        box_list: List,
         page_idx: int,
         img_h: int,
         img_w: int,
@@ -249,47 +249,60 @@ class TableDetector:
     ) -> List[DetectedTable]:
         """
         将VLM返回的表格框列表解析为DetectedTable对象列表
+        自动兼容多层嵌套：[ [框1,框2] ] / [框1] / [框1,框2] 三种格式
         """
+        # 第一步：扁平化所有坐标，提取纯四元框数组
+        flat_boxes = []
+
+        def extract_boxes(arr):
+            """递归提取所有长度=4的坐标数组"""
+            for item in arr:
+                if isinstance(item, list):
+                    if len(item) == 4 and all(isinstance(x, (int, float)) for x in item):
+                        # 标准坐标框
+                        flat_boxes.append([int(round(v)) for v in item])
+                    else:
+                        extract_boxes(item)
+
+        extract_boxes(box_list)
+        if not flat_boxes:
+            logger.warning(f"{tag} 未提取到任何合法表格坐标")
+            return []
+
+        # 第二步：过滤+生成表格对象
         tables = []
-        for idx, box in enumerate(box_list):
-            # 验证边界框格式
-            if len(box) != 4:
-                logger.warning(f"{tag} 表格#{idx} 边界框格式错误：{box}，跳过")
-                continue
-            
+        for idx, box in enumerate(flat_boxes):
             x1, y1, x2, y2 = box
             # 坐标合法性校验（防止越界）
             x1 = max(0, min(x1, img_w))
             y1 = max(0, min(y1, img_h))
             x2 = max(x1 + 1, min(x2, img_w))  # 确保x2 > x1
             y2 = max(y1 + 1, min(y2, img_h))  # 确保y2 > y1
+            # 过滤极小无效框
+            w = x2 - x1
+            h = y2 - y1
+            if w < 20 or h < 20:
+                logger.warning(f"{tag} 表格#{idx} 尺寸过小，跳过 {box}")
+                continue
 
-            # VLM无原生置信度，模拟置信度（可根据业务调整规则）
-            # 规则：框的面积合理性 + 坐标完整性 作为置信度参考
-            box_area = (x2 - x1) * (y2 - y1)
+            # VLM模拟置信度
+            box_area = w * h
             img_area = img_w * img_h
             area_ratio = box_area / img_area if img_area > 0 else 0.0
-
-            # 模拟置信度（0.7~0.95区间，排除过小/过大的框）
-            if 0.001 < area_ratio < 0.95:  # 合理面积范围
-                confidence = 0.90  # 高置信
+            if 0.001 < area_ratio < 0.95:
+                confidence = 0.90
             elif 0.0001 < area_ratio <= 0.001 or 0.95 <= area_ratio < 0.99:
-                confidence = 0.70  # 中置信
+                confidence = 0.70
             else:
-                confidence = 0.50  # 低置信
-
+                confidence = 0.50
             confidence_level = classify_confidence(confidence)
             warning = None
-
-            # 生成预警信息
             if confidence_level in ("medium", "low"):
                 warning = (
                     f"表格#{idx} 置信度偏低({confidence:.2f})，"
                     f"建议人工复核（页码={page_idx}，坐标=[{x1},{y1},{x2},{y2}]）"
                 )
                 logger.warning(f"{tag} {warning}")
-
-            # 创建DetectedTable对象
             tables.append(DetectedTable(
                 bbox=(x1, y1, x2, y2),
                 confidence=confidence,
@@ -298,7 +311,6 @@ class TableDetector:
                 table_idx=idx,
                 warning=warning,
             ))
-
         return tables
 
 
