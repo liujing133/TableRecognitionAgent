@@ -46,84 +46,62 @@ def _get_bbox_y_range(pts):
 
 
 def _align_columns_across_rows(sorted_rows):
-    """跨行对齐列：用所有行的 x 中位数位置构建统一列边界"""
+    """
+    跨行对齐列：用最长行（参考行）的 x 范围作为列边界参考，
+    其他行按 x 重叠匹配到对应列。避免 DBSCAN 过分割问题。
+    """
     if not sorted_rows:
         return sorted_rows
 
-    # 收集所有 cell 的 x 中心位置
-    all_x_centers = []
-    for row_items in sorted_rows:
-        for item in row_items:
-            x1, x2 = _get_bbox_x_range(item[4])
-            all_x_centers.append((x1 + x2) / 2.0)
+    # 1. 找参考行（格子最多的行）
+    ref_idx = max(range(len(sorted_rows)), key=lambda i: len(sorted_rows[i]))
+    ref_row = sorted_rows[ref_idx]
 
-    if len(all_x_centers) < 2:
+    # 2. 从参考行定义列边界
+    col_boundaries = []
+    for item in ref_row:
+        x1, x2 = _get_bbox_x_range(item[4])
+        col_boundaries.append((x1, x2))
+
+    if len(col_boundaries) < 1:
         return sorted_rows
 
-    # 用 DBSCAN 对所有 x_center 做一维列聚类，得到全局列簇
-    x_coords = np.array(all_x_centers).reshape(-1, 1)
-    # eps 取 x 方向间距中位数的 0.6 倍
-    sorted_x = np.sort(all_x_centers)
-    gaps = np.diff(sorted_x)
-    median_gap = float(np.median(gaps)) if len(gaps) > 0 else 20.0
-    eps_col = max(median_gap * 0.6, 5.0)
-    col_labels = DBSCAN(eps=eps_col, min_samples=1).fit(x_coords).labels_
-
-    # 计算每列的中心位置（取该簇所有 x 的中位数）
-    col_centers = {}
-    for label, cx in zip(col_labels, all_x_centers):
-        if label not in col_centers:
-            col_centers[label] = []
-        col_centers[label].append(cx)
-
-    sorted_cols = sorted(col_centers.keys(), key=lambda k: np.median(col_centers[k]))
-    col_idx_map = {label: i for i, label in enumerate(sorted_cols)}
-
-    # 重新排列每个行，将 cell 分配到对应的列位置
+    # 3. 每行的 text block 按 x 重叠匹配到对应列
     aligned_rows = []
-    idx = 0
     for row_items in sorted_rows:
-        # 为每行创建一个 dict: col_index -> cell
         col_dict = {}
         for item in row_items:
             x1, x2 = _get_bbox_x_range(item[4])
-            cx_item = (x1 + x2) / 2.0
-            # 找到最近的列
-            best_col = None
-            min_dist = float('inf')
-            for label, cx_list in col_centers.items():
-                col_cx = np.median(cx_list)
-                dist = abs(cx_item - col_cx)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_col = label
-            if best_col is not None:
-                ci = col_idx_map[best_col]
-                # 如果该列已有 cell，合并文本（多行文本块属于同一格）
-                if ci in col_dict:
-                    existing = col_dict[ci]
+            best_col = -1
+            best_overlap = 0
+            for ci, (bx1, bx2) in enumerate(col_boundaries):
+                overlap = max(0.0, min(x2, bx2) - max(x1, bx1))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_col = ci
+            if best_col >= 0 and best_overlap > 0:
+                if best_col in col_dict:
+                    # 同列多个 text block → 合并文本和 bbox
+                    existing = col_dict[best_col]
                     existing[2] = existing[2] + " " + item[2]
-                    # 合并 bbox
                     e_pts = np.array(existing[4], dtype=float)
                     n_pts = np.array(item[4], dtype=float)
-                    if e_pts.ndim == 2:
+                    if e_pts.ndim == 2 and n_pts.ndim == 2:
                         xs = np.concatenate([e_pts[:, 0], n_pts[:, 0]])
                         ys = np.concatenate([e_pts[:, 1], n_pts[:, 1]])
-                        merged_pts = [[float(np.min(xs)), float(np.min(ys))],
-                                      [float(np.max(xs)), float(np.min(ys))],
-                                      [float(np.max(xs)), float(np.max(ys))],
-                                      [float(np.min(xs)), float(np.max(ys))]]
-                        existing[4] = merged_pts
+                        existing[4] = [[float(np.min(xs)), float(np.min(ys))],
+                                       [float(np.max(xs)), float(np.min(ys))],
+                                       [float(np.max(xs)), float(np.max(ys))],
+                                       [float(np.min(xs)), float(np.max(ys))]]
                 else:
-                    col_dict[ci] = list(item)
+                    col_dict[best_col] = list(item)
 
-        # 按列顺序输出
+        # 按列顺序输出，缺列补空
         new_row = []
-        for ci in range(len(sorted_cols)):
+        for ci in range(len(col_boundaries)):
             if ci in col_dict:
                 new_row.append(col_dict[ci])
             else:
-                # 缺列 → 插空
                 new_row.append(["", "", "", 0.0, []])
         aligned_rows.append(new_row)
 
@@ -184,7 +162,7 @@ def cluster_rows_cols(text_blocks, cfg):
     # 4. 跨行列对齐
     aligned_rows = _align_columns_across_rows(sorted_rows)
 
-    # 5. 构建最终网格
+    # 5. 构建最终网格（已对齐，直接转换）
     final_grid = []
     for row_items in aligned_rows:
         cells = []
@@ -192,7 +170,6 @@ def cluster_rows_cols(text_blocks, cfg):
             text = item[2] if isinstance(item[2], str) else ""
             score = item[3] if isinstance(item[3], (int, float)) else 0.0
             raw_bbox = item[4]
-            # 处理 numpy array 或 list/tuple
             if isinstance(raw_bbox, np.ndarray):
                 pts_np = raw_bbox
             elif isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) > 0:
@@ -216,77 +193,42 @@ def cluster_rows_cols(text_blocks, cfg):
             })
         final_grid.append(cells)
 
-    # 5. 统一列数并推断合并单元格
-    if final_grid:
-        max_col_cnt = max([len(row) for row in final_grid])
-        # 5a. 计算列边界：用最长的行（或所有行的众数行）确定 x 分区
-        ref_row_idx = max(range(len(final_grid)), key=lambda i: len(final_grid[i]))
-        ref_cells = final_grid[ref_row_idx]
-        # 计算每列的 x 起始/结束边界
-        col_boundaries = []
-        for cell in ref_cells:
+    # 5b. 推断合并单元格：检测 x 范围跨越多列边界的格
+    if final_grid and len(final_grid) > 0:
+        # 用参考行的左/右边界确定每列范围
+        col_x_starts = []
+        col_x_ends = []
+        for cell in final_grid[0]:
             pts = np.array(cell["bbox"], dtype=float)
             if pts.ndim == 2 and pts.shape[1] == 2:
-                x1, x2 = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
-            elif pts.ndim == 1 and pts.size == 4:
-                x1, x2 = float(pts[0]), float(pts[2])
+                col_x_starts.append(float(np.min(pts[:, 0])))
+                col_x_ends.append(float(np.max(pts[:, 0])))
             else:
-                continue
-            col_boundaries.append((x1, x2))
-        if not col_boundaries:
-            col_boundaries = [(float(i) / max_col_cnt, float(i + 1) / max_col_cnt) for i in range(max_col_cnt)]
+                col_x_starts.append(0.0)
+                col_x_ends.append(0.0)
+        # 用相邻列的边界平滑化
+        for i in range(1, len(col_x_starts)):
+            col_x_starts[i] = max(col_x_starts[i], col_x_ends[i-1])
+        for i in range(len(col_x_starts) - 1):
+            col_x_ends[i] = min(col_x_ends[i], col_x_starts[i+1])
 
-        # 5b. 检测列数偏少的行：推断 colspan
-        for row in final_grid:
-            if len(row) >= max_col_cnt:
-                continue
-            # 该行物理格子少于标准列数 → 可能存在合并单元格
-            inferred_cols = 0
-            new_cells = []
-            for cell in row:
+        # 对每行检查是否有跨列
+        for ri, row in enumerate(final_grid):
+            for ci, cell in enumerate(row):
                 pts = np.array(cell["bbox"], dtype=float)
-                if pts.ndim == 2 and pts.shape[1] == 2:
-                    cx1, cx2 = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
-                elif pts.ndim == 1 and pts.size == 4:
-                    cx1, cx2 = float(pts[0]), float(pts[2])
-                else:
-                    cx1, cx2 = 0.0, 0.0
-                cx_mid = (cx1 + cx2) / 2.0
-                # 计算此 Cell 跨越了几列
-                span = 1
-                for bi, (bx1, bx2) in enumerate(col_boundaries):
-                    if bi < inferred_cols:
-                        continue
-                    if cx1 <= bx2 and cx2 >= bx1:
-                        # 此格子的 x 范围与该列相交
-                        if inferred_cols == bi:
-                            span = 1
-                            inferred_cols += 1
-                        else:
-                            # 跳过了一些列 → 需要补 colspan
-                            gap = bi - inferred_cols
-                            if gap > 0:
-                                inferred_cols += gap
-                                span += gap
-                            inferred_cols += 1
-                            span += (bi + 1 - inferred_cols) if bi + 1 > inferred_cols else 0
-                            break
-                # 更精确的跨度计算：以 x 区间覆盖的列数
-                actual_span = max(1, sum(1 for bx1, bx2 in col_boundaries
-                                         if not (cx2 < bx1 or cx1 > bx2)))
-                if actual_span > 1:
-                    cell["colspan"] = actual_span
-                    inferred_cols += actual_span - 1
-                new_cells.append(cell)
-                inferred_cols += 1
-                if inferred_cols >= max_col_cnt:
-                    break
-
-            # 用新推断的单元格替换
-            row.clear()
-            row.extend(new_cells)
-            # 补空到 max_col_cnt
-            while len(row) < max_col_cnt:
-                row.append({"text": "", "score": 0, "bbox": [], "rowspan": 1, "colspan": 1})
+                if pts.ndim != 2 or pts.shape[1] != 2:
+                    continue
+                cx1 = float(np.min(pts[:, 0]))
+                cx2 = float(np.max(pts[:, 0]))
+                # 统计此格覆盖了多少列边界
+                covered = 0
+                for bi in range(len(col_x_starts)):
+                    if cx2 > col_x_starts[bi] and cx1 < col_x_ends[bi]:
+                        covered += 1
+                if covered >= 2:
+                    cell["colspan"] = covered
+                    # 把被覆盖的列标记为空
+                    for bi in range(ci + 1, min(ci + covered, len(row))):
+                        row[bi]["text"] = ""
 
     return final_grid
