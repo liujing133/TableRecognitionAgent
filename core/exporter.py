@@ -10,16 +10,25 @@ def export_struct_json(table_data: dict, anchor: dict, teds: float, warn_level: 
     }
 
 def export_markdown(table_data: dict) -> str:
-    """生成支持合并单元格的Markdown表格"""
+    """生成支持合并单元格的Mark表格，自动过滤末尾空列"""
     rows = table_data["rows"]
     if not rows:
         return ""
-    # 表头
-    header = [c["text"] for c in rows[0]["cells"]]
+    # 过滤每行尾部连续空单元格
+    def trim_empty_cells(cell_list):
+        idx = len(cell_list)
+        while idx > 0 and cell_list[idx-1]["text"].strip() == "":
+            idx -= 1
+        return cell_list[:idx]
+    header_cells = trim_empty_cells(rows[0]["cells"])
+    header = [c["text"] for c in header_cells]
+    if not header:
+        return ""
     md = "| " + " | ".join(header) + " |\n"
     md += "| " + " | ".join(["---"]*len(header)) + " |\n"
-    # 表体
+    # 表体同样裁剪空列
     for r in rows[1:]:
-        cells = [c["text"] for c in r["cells"]]
-        md += "| " + " | ".join(cells) + " |\n"
+        cells = trim_empty_cells(r["cells"])
+        cell_texts = [c["text"] for c in cells]
+        md += "| " + " | ".join(cell_texts) + " |\n"
     return md

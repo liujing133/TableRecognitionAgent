@@ -216,19 +216,48 @@ def cluster_rows_cols(text_blocks, cfg):
         for ri, row in enumerate(final_grid):
             for ci, cell in enumerate(row):
                 pts = np.array(cell["bbox"], dtype=float)
-                if pts.ndim != 2 or pts.shape[1] != 2:
-                    continue
-                cx1 = float(np.min(pts[:, 0]))
-                cx2 = float(np.max(pts[:, 0]))
-                # 统计此格覆盖了多少列边界
-                covered = 0
-                for bi in range(len(col_x_starts)):
-                    if cx2 > col_x_starts[bi] and cx1 < col_x_ends[bi]:
-                        covered += 1
-                if covered >= 2:
-                    cell["colspan"] = covered
-                    # 把被覆盖的列标记为空
-                    for bi in range(ci + 1, min(ci + covered, len(row))):
-                        row[bi]["text"] = ""
+                if pts.ndim == 2 and pts.shape[1] == 2:
+                    cx1, cx2 = float(np.min(pts[:, 0])), float(np.max(pts[:, 0]))
+                elif pts.ndim == 1 and pts.size == 4:
+                    cx1, cx2 = float(pts[0]), float(pts[2])
+                else:
+                    cx1, cx2 = 0.0, 0.0
+                cx_mid = (cx1 + cx2) / 2.0
+                # 计算此 Cell 跨越了几列
+                span = 1
+                for bi, (bx1, bx2) in enumerate(col_boundaries):
+                    if bi < inferred_cols:
+                        continue
+                    if cx1 <= bx2 and cx2 >= bx1:
+                        # 此格子的 x 范围与该列相交
+                        if inferred_cols == bi:
+                            span = 1
+                            inferred_cols += 1
+                        else:
+                            # 跳过了一些列 → 需要补 colspan
+                            gap = bi - inferred_cols
+                            if gap > 0:
+                                inferred_cols += gap
+                                span += gap
+                            inferred_cols += 1
+                            span += (bi + 1 - inferred_cols) if bi + 1 > inferred_cols else 0
+                            break
+                # 更精确的跨度计算：以 x 区间覆盖的列数
+                actual_span = max(1, sum(1 for bx1, bx2 in col_boundaries
+                                         if not (cx2 < bx1 or cx1 > bx2)))
+                if actual_span > 1:
+                    cell["colspan"] = actual_span
+                    inferred_cols += actual_span - 1
+                new_cells.append(cell)
+                inferred_cols += 1
+                if inferred_cols >= max_col_cnt:
+                    break
+
+            # 用新推断的单元格替换
+            row.clear()
+            row.extend(new_cells)
+            # 补空到 max_col_cnt
+            # while len(row) < max_col_cnt:
+            #     row.append({"text": "", "score": 0, "bbox": [], "rowspan": 1, "colspan": 1})
 
     return final_grid
