@@ -47,26 +47,20 @@ def _get_bbox_y_range(pts):
 
 def _align_columns_across_rows(sorted_rows):
     """
-    跨行对齐列：用最长行（参考行）的 x 范围作为列边界参考，
-    其他行按 x 重叠匹配到对应列。避免 DBSCAN 过分割问题。
+    跨行对齐列：用最长行（参考行）的 x 范围作为列边界参考
     """
     if not sorted_rows:
         return sorted_rows
-
-    # 1. 找参考行（格子最多的行）
+    # 1. 找格子最多的参考行
     ref_idx = max(range(len(sorted_rows)), key=lambda i: len(sorted_rows[i]))
     ref_row = sorted_rows[ref_idx]
-
-    # 2. 从参考行定义列边界
+    # 2. 提取每列左右边界
     col_boundaries = []
     for item in ref_row:
         x1, x2 = _get_bbox_x_range(item[4])
         col_boundaries.append((x1, x2))
-
     if len(col_boundaries) < 1:
         return sorted_rows
-
-    # 3. 每行的 text block 按 x 重叠匹配到对应列
     aligned_rows = []
     for row_items in sorted_rows:
         col_dict = {}
@@ -75,28 +69,25 @@ def _align_columns_across_rows(sorted_rows):
             best_col = -1
             best_overlap = 0
             for ci, (bx1, bx2) in enumerate(col_boundaries):
+                # 仅用重叠面积判断，不再加中心距离容错
                 overlap = max(0.0, min(x2, bx2) - max(x1, bx1))
                 if overlap > best_overlap:
                     best_overlap = overlap
                     best_col = ci
             if best_col >= 0 and best_overlap > 0:
                 if best_col in col_dict:
-                    # 同列多个 text block → 合并文本和 bbox
                     existing = col_dict[best_col]
                     existing[2] = existing[2] + " " + item[2]
                     e_pts = np.array(existing[4], dtype=float)
                     n_pts = np.array(item[4], dtype=float)
-                    if e_pts.ndim == 2 and n_pts.ndim == 2:
-                        xs = np.concatenate([e_pts[:, 0], n_pts[:, 0]])
-                        ys = np.concatenate([e_pts[:, 1], n_pts[:, 1]])
-                        existing[4] = [[float(np.min(xs)), float(np.min(ys))],
-                                       [float(np.max(xs)), float(np.min(ys))],
-                                       [float(np.max(xs)), float(np.max(ys))],
-                                       [float(np.min(xs)), float(np.max(ys))]]
+                    xs = np.concatenate([e_pts[:, 0], n_pts[:, 0]])
+                    ys = np.concatenate([e_pts[:, 1], n_pts[:, 1]])
+                    existing[4] = [[float(np.min(xs)), float(np.min(ys))],
+                                   [float(np.max(xs)), float(np.min(ys))],
+                                   [float(np.max(xs)), float(np.max(ys))],
+                                   [float(np.min(xs)), float(np.max(ys))]]
                 else:
                     col_dict[best_col] = list(item)
-
-        # 按列顺序输出，缺列补空
         new_row = []
         for ci in range(len(col_boundaries)):
             if ci in col_dict:
@@ -104,9 +95,7 @@ def _align_columns_across_rows(sorted_rows):
             else:
                 new_row.append(["", "", "", 0.0, []])
         aligned_rows.append(new_row)
-
     return aligned_rows
-
 
 def cluster_rows_cols(text_blocks, cfg):
     """
