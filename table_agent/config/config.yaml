@@ -16,16 +16,7 @@ preprocessor:
   brightness_threshold: 0.3   # 光照均匀性阈值（<0.3判定为光照不均）
 
 detector:
-  # [模型] Qwen2.5-VL（Ollama部署）表格检测参数
-  ollama_url: "http://127.0.0.1:11434/api/chat"        # Ollama服务地址
-  ollama_model: "qwen2.5vl:7b-q4_K_M"                  # 使用的模型名称
-  max_img_size: 1024                                   # 图像最大边长（像素）
-  temperature: 0.01                                    # 输出随机性（越低越稳定）
-  timeout: 300                                         # 超时时间（秒）
-  padding: 8                                           # 表格区域裁剪padding（保留原配置）
-  # 置信度分级阈值（保留原配置）
-  conf_threshold: 0.1        
-  iou_threshold: 0.45         
+  conf_threshold: 0.4      
 
 ocr:
   # [模型] PaddleOCR参数
